@@ -8,31 +8,33 @@ import snowflake.connector
 # -----------------------------
 load_dotenv()
 
-client = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+# ✅ Use ENV for local script
+client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 # -----------------------------
 # SNOWFLAKE SEARCH
 # -----------------------------
 def search_documents(query):
     conn = snowflake.connector.connect(
-        user=st.secrets("SNOWFLAKE_USER"),
-        password=st.secrets("SNOWFLAKE_PASSWORD"),
-        account=st.secrets("SNOWFLAKE_ACCOUNT"),
-        warehouse=st.secrets("SNOWFLAKE_WAREHOUSE"),
-        database=st.secrets("SNOWFLAKE_DATABASE"),
-        schema=st.secrets("SNOWFLAKE_SCHEMA")
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA")
     )
 
     cursor = conn.cursor()
 
-    sql = f"""
+    # ✅ SAFE query
+    sql = """
     SELECT year, file_name, content
-    FROM medical_records
-    WHERE content ILIKE '%{query}%'
+    FROM medical_db.records.medical_records
+    WHERE content ILIKE %s
     LIMIT 10
     """
 
-    cursor.execute(sql)
+    cursor.execute(sql, (f"%{query}%",))
     results = cursor.fetchall()
 
     cursor.close()
@@ -60,24 +62,15 @@ def ask_agent(question):
     ])
 
     print("🧠 Sending to Claude...\n")
-try:
-    test = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=50,
-        messages=[{"role": "user", "content": "Say hello"}]
-    )
-    st.success("Claude connected!")
-    st.write(test.content[0].text)
-except Exception as e:
-    st.error(f"Claude error: {e}")
-#--
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",  # ✅ valid model
+            max_tokens=1000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""
 You are a medical assistant analyzing long-term patient records.
 
 Instructions:
@@ -95,13 +88,16 @@ Question:
 
 If unsure, say you don't know.
 """
-            }
-        ]
-    )
+                }
+            ]
+        )
 
-    print("\n--- ✅ ANSWER ---\n")
-    print(response.content[0].text)
-#--
+        print("\n--- ✅ ANSWER ---\n")
+        print(response.content[0].text)
+
+    except Exception as e:
+        print(f"❌ Claude error: {e}")
+
 
 # -----------------------------
 # RUN LOOP
