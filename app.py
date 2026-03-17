@@ -1,117 +1,89 @@
-import os
 import streamlit as st
 from anthropic import Anthropic
-from dotenv import load_dotenv
-from pypdf import PdfReader
+import snowflake.connector
+import os
 
-# -----------------------------
-# LOAD API KEY
-# -----------------------------
-load_dotenv()
+# --- CONFIG ---
+st.set_page_config(page_title="Medical AI Agent", layout="wide")
+st.title("🧠 Pradeepthi Medical AI Agent")
+
+# --- API KEY ---
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-BASE_PATH = "/Users/shaivibhandekar/Desktop/Pradeepthi Medical Agent"
+# --- SNOWFLAKE SEARCH FUNCTION ---
+def search_documents(query):
+    conn = snowflake.connector.connect(
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),  # 👈 use env
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA")
+    )
 
-# -----------------------------
-# READ PDF
-# -----------------------------
-def read_pdf(file_path):
-    text = ""
-    try:
-        reader = PdfReader(file_path)
-        for page in reader.pages:
-            text += page.extract_text() or ""
-    except:
-        pass
-    return text
+    cursor = conn.cursor()
 
-# -----------------------------
-# READ ALL FILES
-# -----------------------------
-def read_all_files():
-    matched_text = ""
+    sql = f"""
+    SELECT year, file_name, content
+    FROM medical_records
+    WHERE content ILIKE '%{query}%'
+    LIMIT 10
+    """
 
-    for root, dirs, files in os.walk(BASE_PATH):
-        for file in files:
-            file_path = os.path.join(root, file)
+    cursor.execute(sql)
+    results = cursor.fetchall()
 
-            try:
-                if file.lower().endswith(".pdf"):
-                    text = read_pdf(file_path)
-                elif file.lower().endswith((".txt", ".csv")):
-                    with open(file_path, "r", errors="ignore") as f:
-                        text = f.read()
-                else:
-                    continue
+    cursor.close()
+    conn.close()
 
-                if text:
-                    matched_text += f"\n\n--- {file} ---\n"
-                    matched_text += text[:1200]
+    return results
 
-            except:
-                continue
 
-    return matched_text
+# --- MAIN APP ---
+st.subheader("Ask questions about medical records")
 
-# -----------------------------
-# STREAMLIT UI
-# -----------------------------
-st.set_page_config(page_title="Medical AI Agent", layout="wide")
+question = st.text_input("Enter your question")
 
-st.title("🧠 Medical AI Agent")
-st.caption("Analyzing Pradeepthi Medical Records")
+if question:
+    with st.spinner("Analyzing medical records..."):
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+        results = search_documents(question)
 
-# Display chat history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        if not results:
+            st.error("No relevant data found.")
+        else:
+            # 🔥 Build context
+            context = "\n\n".join([
+                f"Year: {row[0]} | File: {row[1]}\n{row[2][:1500]}"
+                for row in results
+            ])
 
-# User input
-if prompt := st.chat_input("Ask about medical history, medications, risks..."):
+            # 🤖 Claude prompt
+            prompt = f"""
+You are a medical assistant.
 
-    # Show user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+Answer ONLY using the context below.
 
-    # Read data
-    with st.spinner("Reading medical records..."):
-        context = read_all_files()
-
-    # Claude response
-    with st.spinner("Thinking..."):
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1200,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"""
-You are a medical assistant analyzing long-term patient records.
-
-Instructions:
-- Use ONLY the provided records
-- Identify patterns across years
-- Highlight key medications
-- Explain risks clearly
-- Be structured and clear
-
-Medical Records:
+Context:
 {context}
 
 Question:
-{prompt}
+{question}
+
+If unsure, say you don't know.
 """
-                }
-            ]
-        )
 
-        answer = response.content[0].text
+            response = client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=800,
+                messages=[{"role": "user", "content": prompt}]
+            )
 
-    # Show assistant response
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-    with st.chat_message("assistant"):
-        st.markdown(answer)
+            st.subheader("Answer")
+            st.write(response.content[0].text)
+
+            # --- DEBUG PANEL ---
+            with st.expander("🔍 Debug Info"):
+                st.write("Chunks used:")
+                for row in results:
+                    st.write(f"- {row[0]} | {row[1]}")
