@@ -1,4 +1,5 @@
 streamlit
 anthropic
 python-dotenv
-pypdf
+pypdf
+snowflake-connector-python

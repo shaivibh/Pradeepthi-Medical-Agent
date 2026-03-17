@@ -12,31 +12,37 @@ client = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
 # --- SNOWFLAKE SEARCH FUNCTION ---
 def search_documents(query):
-    conn = snowflake.connector.connect(
-        user=st.secrets("SNOWFLAKE_USER"),
-        password=st.secrets("SNOWFLAKE_PASSWORD"),
-        account=st.secrets("SNOWFLAKE_ACCOUNT"),
-        warehouse=st.secrets("SNOWFLAKE_WAREHOUSE"),  # 👈 use env
-        database=st.secrets("SNOWFLAKE_DATABASE"),
-        schema=st.secrets("SNOWFLAKE_SCHEMA")
-    )
+    try:
+        conn = snowflake.connector.connect(
+            user=st.secrets["SNOWFLAKE_USER"],
+            password=st.secrets["SNOWFLAKE_PASSWORD"],
+            account=st.secrets["SNOWFLAKE_ACCOUNT"],
+            warehouse=st.secrets["SNOWFLAKE_WAREHOUSE"],
+            database=st.secrets["SNOWFLAKE_DATABASE"],
+            schema=st.secrets["SNOWFLAKE_SCHEMA"]
+        )
 
-    cursor = conn.cursor()
+        cursor = conn.cursor()
 
-    sql = f"""
-    SELECT year, file_name, content
-    FROM medical_records
-    WHERE content ILIKE '%{query}%'
-    LIMIT 10
-    """
+        # ✅ SAFE QUERY (prevents SQL injection)
+        sql = """
+        SELECT year, file_name, content
+        FROM medical_records
+        WHERE content ILIKE %s
+        LIMIT 10
+        """
 
-    cursor.execute(sql)
-    results = cursor.fetchall()
+        cursor.execute(sql, (f"%{query}%",))
+        results = cursor.fetchall()
 
-    cursor.close()
-    conn.close()
+        cursor.close()
+        conn.close()
 
-    return results
+        return results
+
+    except Exception as e:
+        st.error(f"Snowflake error: {e}")
+        return []
 
 
 # --- MAIN APP ---
@@ -52,37 +58,51 @@ if question:
         if not results:
             st.error("No relevant data found.")
         else:
-            # 🔥 Build context
+            # Build context
             context = "\n\n".join([
                 f"Year: {row[0]} | File: {row[1]}\n{row[2][:1500]}"
                 for row in results
             ])
 
-            # 🤖 Claude prompt
             prompt = f"""
 You are a medical assistant.
 
-Answer ONLY using the context below.
+STRICT RULES:
+- Answer ONLY using the provided context
+- Do NOT assume anything
+- If information is missing, say "I don't know"
 
 Context:
 {context}
 
 Question:
 {question}
-
-If unsure, say you don't know.
 """
 
-            response = client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=800,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            try:
+                response = client.messages.create(
+                    model="claude-3-haiku-20240307",
+                    max_tokens=800,
+                    temperature=0,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
 
-            st.subheader("Answer")
-            st.write(response.content[0].text)
+                # ✅ safer extraction
+                answer = ""
+                if response.content:
+                    for block in response.content:
+                        if hasattr(block, "text"):
+                            answer += block.text
 
-            # --- DEBUG PANEL ---
+                st.subheader("Answer")
+                st.write(answer)
+
+            except Exception as e:
+                st.error(f"Claude API error: {e}")
+
+            # --- DEBUG ---
             with st.expander("🔍 Debug Info"):
                 st.write("Chunks used:")
                 for row in results:
